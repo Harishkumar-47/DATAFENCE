@@ -1,0 +1,11 @@
+venv/
+backend/venv/
+frontend/node_modules/
+__pycache__/
+*.pyc
+.env
+*.db
+datafence.db
+cyberrange.db
+dist/
+.DS_Store
