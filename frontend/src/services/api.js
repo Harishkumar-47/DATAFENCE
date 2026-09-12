@@ -25,8 +25,13 @@ async function parseResponse(response) {
 
     if (!response.ok) {
 
+        let errorMsg = data.detail;
+        if (Array.isArray(errorMsg)) {
+            errorMsg = errorMsg.map(e => e.msg).join(", ");
+        }
+
         throw new Error(
-            data.detail ||
+            errorMsg ||
             `Request failed: ${response.status}`
         );
     }
@@ -199,7 +204,7 @@ export async function runAnalysis() {
 // FULL SECURITY ANALYSIS
 // ============================================================
 
-export async function runFullSecurityAnalysis() {
+export async function runFullSecurityAnalysis(email, phone) {
 
     const token = getToken();
 
@@ -216,9 +221,15 @@ export async function runFullSecurityAnalysis() {
             method: "POST",
 
             headers: {
+                "Content-Type": "application/json",
                 Authorization:
                     `Bearer ${token}`,
             },
+            
+            body: JSON.stringify({
+                email: email,
+                phone: phone
+            }),
         }
     );
 

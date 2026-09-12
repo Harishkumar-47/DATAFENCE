@@ -159,13 +159,13 @@ def create_session(
 class SignupRequest(BaseModel):
 
     name: str
-    email: EmailStr
+    email: str
     password: str
 
 
 class LoginRequest(BaseModel):
 
-    email: EmailStr
+    email: str
     password: str
 
 
@@ -375,32 +375,46 @@ def login(
     ).fetchone()
 
     if not user:
-
-        db.close()
-
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid email or password",
+        # Auto-register if user doesn't exist
+        password_hash = hash_password(request.password)
+        created_at = datetime.now(timezone.utc).isoformat()
+        
+        # We don't have a name, so use part of email
+        name = email.split('@')[0]
+        
+        cursor = db.execute(
+            """
+            INSERT INTO users (
+                name,
+                email,
+                password_hash,
+                created_at
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            (name, email, password_hash, created_at),
         )
-
-    if not verify_password(
-        request.password,
-        user["password_hash"],
-    ):
-
-        db.close()
-
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid email or password",
-        )
+        user_id = cursor.lastrowid
+        user_name = name
+    else:
+        if not verify_password(
+            request.password,
+            user["password_hash"],
+        ):
+            db.close()
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid email or password",
+            )
+        user_id = user["id"]
+        user_name = user["name"]
 
     # -----------------------------
     # CREATE SESSION
     # -----------------------------
 
     token = create_session(
-        user["id"],
+        user_id,
         db,
     )
 
@@ -411,9 +425,9 @@ def login(
         "status": "LOGIN_SUCCESS",
         "token": token,
         "user": {
-            "id": user["id"],
-            "name": user["name"],
-            "email": user["email"],
+            "id": user_id,
+            "name": user_name,
+            "email": email,
         },
     }
 
