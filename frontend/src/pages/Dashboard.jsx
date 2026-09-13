@@ -81,7 +81,23 @@ export default function Dashboard({ onLogout }) {
     setTimeout(() => {
       setResolvedSteps(prev => ({ ...prev, [stepIndex]: true }));
       setResolvingStep(null);
-    }, 2000);
+    }, 1000);
+  };
+
+  const handleDownloadReport = () => {
+    const reportContent = `DATAFENCE SECURITY REPORT\n\nTarget Email: ${targetEmail}\nTarget Phone: ${targetPhone}\nSecurity Score: ${security?.security_score || 0}/100\nRisk Level: ${security?.risk_level || 'UNKNOWN'}\n\nBREACHES DETECTED:\n${analysis?.breach_analysis?.org_analysis?.map(o => `- ${o.name} (${o.breach_count.toLocaleString()} accounts)`).join('\n') || 'None'}\n\nREMEDIATION PLAN:\n${remediation_plan?.map(s => `- ${s.title}\n  ${s.description}`).join('\n\n') || 'No issues found.'}\n\nGenerated on: ${new Date().toLocaleString()}`;
+    const blob = new Blob([reportContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `DataFence_Report.txt`;
+    a.click();
+  };
+
+  const handleGenerateEmail = (domain) => {
+    const subject = encodeURIComponent(`Data Deletion Request - GDPR/CCPA - ${targetEmail}`);
+    const body = encodeURIComponent(`To the Privacy Team at ${domain || 'this organization'},\n\nI am writing to request the immediate deletion of all personal data associated with my email address (${targetEmail}) in accordance with GDPR and CCPA regulations.\n\nPlease confirm when this has been completed.\n\nThank you.`);
+    window.location.href = `mailto:privacy@${domain || 'example.com'}?subject=${subject}&body=${body}`;
   };
   
   const security = analysis?.security || { security_score: 0, risk_level: "UNKNOWN", risk_score: 0 };
@@ -207,12 +223,17 @@ export default function Dashboard({ onLogout }) {
                         <span className="terminal-label">STATUS:</span>
                         <span className="terminal-value" style={{ color: "#ff003c" }}>COMPROMISED</span>
                       </div>
-                      <span className="terminal-label" style={{ display: 'block', marginBottom: '10px' }}>BREACH ORIGINS:</span>
-                      <ul className="breach-list">
-                        {analysis.breach_analysis.breach_sites?.map((site, idx) => (
-                          <li key={idx}>{site}</li>
-                        )) || <li>Unknown Datasets</li>}
-                      </ul>
+                      <span className="terminal-label" style={{ display: 'block', marginBottom: '10px', marginTop: '15px' }}>CONNECTED ORGANIZATIONS (BREACHED):</span>
+                      <div className="org-analysis-list" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {analysis.breach_analysis.org_analysis?.map((org, idx) => (
+                          <div key={idx} style={{ borderLeft: org.high_risk ? '3px solid #ff003c' : '3px solid #f39c12', paddingLeft: '10px' }}>
+                            <strong style={{ color: org.high_risk ? '#ff003c' : '#f39c12' }}>{org.name}</strong> {org.high_risk && <span style={{fontSize: '10px', background: '#ff003c', color: 'white', padding: '2px 5px', borderRadius: '3px', marginLeft: '5px'}}>HIGH RISK</span>}
+                            <div style={{ fontSize: '12px', color: '#888' }}>Domain: {org.domain}</div>
+                            <div style={{ fontSize: '12px', color: '#ccc' }}>Total Accounts Breached: {org.breach_count.toLocaleString()}</div>
+                            {org.xposed_data && <div style={{ fontSize: '12px', color: '#888' }}>Exposed Data: {org.xposed_data.replace(/;/g, ', ')}</div>}
+                          </div>
+                        )) || <div style={{ color: '#888' }}>No detailed data available</div>}
+                      </div>
                     </div>
                   ) : (
                     <div>
@@ -226,6 +247,32 @@ export default function Dashboard({ onLogout }) {
                       </div>
                       <p style={{ color: '#888', marginTop: '15px', fontSize: '12px' }}>No active breaches detected in public datasets.</p>
                     </div>
+                  )}
+                </div>
+              )}
+
+              {/* ACTIVE EMAIL OSINT */}
+              {targetEmail && analysis?.active_registered_sites && (
+                <div className="osint-card danger">
+                  <div className="osint-card-title">
+                    <span><Globe size={14} style={{ marginRight: '5px' }} /> Active Footprint (Holehe OSINT)</span>
+                    <span>{analysis.active_registered_sites.length} ACCOUNTS</span>
+                  </div>
+                  <div className="terminal-line" style={{ marginBottom: "15px" }}>
+                    <span className="terminal-label">TARGET:</span>
+                    <span className="terminal-value" style={{ color: "#ff003c" }}>{targetEmail}</span>
+                  </div>
+                  <span className="terminal-label" style={{ display: 'block', marginBottom: '10px' }}>REAL-TIME ACTIVE REGISTRATIONS:</span>
+                  {analysis.active_registered_sites.length > 0 ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                      {analysis.active_registered_sites.map((site, idx) => (
+                        <span key={idx} style={{ background: 'rgba(255, 0, 60, 0.1)', border: '1px solid #ff003c', color: '#ff003c', padding: '5px 10px', borderRadius: '4px', fontSize: '12px' }}>
+                          {site}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p style={{ color: '#888', fontSize: '12px' }}>No active accounts detected on scanned platforms.</p>
                   )}
                 </div>
               )}
@@ -251,8 +298,14 @@ export default function Dashboard({ onLogout }) {
                           <p style={{ color: "#ff003c", fontSize: "14px", lineHeight: "1.5" }}>{finding.inference}</p>
                           <div className="terminal-line" style={{ marginTop: "10px" }}>
                             <span className="terminal-label">LINKED SIM CARDS:</span>
-                            <span className="terminal-value">1 (Simulated)</span>
+                            <span className="terminal-value">{finding.linked_sims || 1} (Simulated Sanchar Saathi)</span>
                           </div>
+                          {finding.linked_apps && finding.linked_apps.length > 0 && (
+                            <div className="terminal-line" style={{ marginTop: "10px" }}>
+                              <span className="terminal-label">LINKED ACCOUNTS & APPS:</span>
+                              <span className="terminal-value" style={{ color: "#ff003c" }}>{finding.linked_apps.join(", ")}</span>
+                            </div>
+                          )}
                         </div>
                       );
                     }
@@ -268,7 +321,7 @@ export default function Dashboard({ onLogout }) {
               )}
             </div>
 
-            <div style={{ textAlign: "center", margin: "40px 0 20px" }}>
+            <div style={{ textAlign: "center", margin: "40px 0 20px", display: "flex", justifyContent: "center", gap: "15px", flexWrap: "wrap" }}>
               <button 
                 className="action-button primary" 
                 onClick={() => setShowRemediation(true)}
@@ -276,6 +329,15 @@ export default function Dashboard({ onLogout }) {
               >
                 <Shield size={20} />
                 INITIATE PROTECTION SEQUENCE
+              </button>
+              
+              <button 
+                className="action-button secondary" 
+                onClick={handleDownloadReport}
+                style={{ background: "#1e293b", color: "#38bdf8", border: "1px solid #38bdf8", cursor: "pointer", padding: "10px 20px", borderRadius: "4px", display: "flex", alignItems: "center", gap: "8px", fontWeight: "bold" }}
+              >
+                <CheckCircle size={20} />
+                DOWNLOAD REPORT
               </button>
             </div>
 
@@ -294,24 +356,43 @@ export default function Dashboard({ onLogout }) {
                       </h4>
                       <p style={{ color: "#94a3b8", fontSize: "13px", lineHeight: "1.6" }}>{step.description}</p>
                       
-                      {/* Internal Simulated Buttons */}
-                      <button 
-                        onClick={() => handleProtect(idx)}
-                        disabled={resolvingStep === idx || resolvedSteps[idx]}
-                        className={`internal-protect-btn ${resolvingStep === idx ? 'resolving' : ''} ${resolvedSteps[idx] ? 'resolved' : ''}`}
-                      >
-                        {resolvedSteps[idx] ? (
-                          <><CheckCircle size={14} /> Protection Active</>
-                        ) : resolvingStep === idx ? (
-                          <><Activity size={14} className="glitch-text" /> Establishing Secure Connection...</>
-                        ) : step.title.includes("Passwords") ? (
-                          <><Lock size={14} /> Automate Password Rotation</>
-                        ) : step.title.includes("Phone") ? (
-                          <><Database size={14} /> Disavow Telecom Connections</>
-                        ) : (
-                          <><Shield size={14} /> Revoke Digital Permissions</>
+                      <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "15px" }}>
+                        <button 
+                          onClick={() => handleProtect(idx)}
+                          disabled={resolvingStep === idx || resolvedSteps[idx]}
+                          className={`internal-protect-btn ${resolvingStep === idx ? 'resolving' : ''} ${resolvedSteps[idx] ? 'resolved' : ''}`}
+                          style={{ flex: 1 }}
+                        >
+                          {resolvedSteps[idx] ? (
+                            <><CheckCircle size={14} /> MARKED AS RESOLVED</>
+                          ) : resolvingStep === idx ? (
+                            <><Activity size={14} className="glitch-text" /> Verifying...</>
+                          ) : (
+                            <><Shield size={14} /> Mark as Resolved</>
+                          )}
+                        </button>
+                        
+                        {step.domain && (
+                          <>
+                            <a 
+                              href={`https://${step.domain}`}
+                              target="_blank" 
+                              rel="noreferrer"
+                              className="internal-protect-btn"
+                              style={{ flex: 1, textDecoration: 'none', textAlign: 'center', background: '#334155', color: '#fff', border: '1px solid #475569', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px' }}
+                            >
+                              <Globe size={14} /> Open {step.domain}
+                            </a>
+                            <button 
+                              onClick={() => handleGenerateEmail(step.domain)}
+                              className="internal-protect-btn"
+                              style={{ flex: 1, background: '#7f1d1d', color: '#fff', border: '1px solid #991b1b', cursor: 'pointer' }}
+                            >
+                              <AlertTriangle size={14} /> GDPR Deletion Email
+                            </button>
+                          </>
                         )}
-                      </button>
+                      </div>
                     </div>
                   ))}
                 </div>

@@ -1,7 +1,9 @@
 fastapi
-uvicorn[standard]
+uvicorn
 pydantic
 email-validator
 python-dotenv
 networkx
 requests
+phonenumbers
+holehe
