@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import {
   Shield,
   LogOut,
@@ -9,8 +9,11 @@ import {
   Brain,
   Lock,
   UserCircle,
+  Clock3,
+  FileJson,
+  RefreshCw,
 } from "lucide-react";
-import { runFullSecurityAnalysis } from "../services/api";
+import { getScanHistory, runFullSecurityAnalysis, updateRemediation } from "../services/api";
 import "../hacker.css";
 
 function RiskCard({ icon, title, value, subtitle }) {
@@ -43,49 +46,53 @@ export default function Dashboard({ onLogout }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [analysis, setAnalysis] = useState(null);
+  const [history, setHistory] = useState([]);
 
   const user = JSON.parse(localStorage.getItem("datafence_user") || '{"name": "User", "email": ""}');
   const targetEmail = user.email;
   const targetPhone = "Not collected";
 
-  useEffect(() => {
-    let mounted = true;
-
-    const analyzeData = async () => {
-      try {
-        const data = await runFullSecurityAnalysis();
-        if (mounted) setAnalysis(data);
-      } catch (err) {
-        if (mounted) setError(err.message || "Failed to run analysis.");
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    };
-
-    analyzeData();
-    
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
   const [showRemediation, setShowRemediation] = useState(false);
   const [resolvingStep, setResolvingStep] = useState(null);
-  const [resolvedSteps, setResolvedSteps] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("datafence_resolved_steps") || "{}"); }
-    catch { return {}; }
-  });
+  const [resolvedSteps, setResolvedSteps] = useState({});
 
-  const handleProtect = (stepIndex) => {
-    setResolvingStep(stepIndex);
-    setTimeout(() => {
-      setResolvedSteps(prev => {
-        const updated = { ...prev, [stepIndex]: true };
-        localStorage.setItem("datafence_resolved_steps", JSON.stringify(updated));
-        return updated;
-      });
+  const loadHistory = useCallback(async () => {
+    const data = await getScanHistory();
+    setHistory(data.items || []);
+  }, []);
+
+  const analyzeData = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await runFullSecurityAnalysis();
+      setAnalysis(data);
+      setResolvedSteps(Object.fromEntries(
+        (data.remediation_plan || []).map((step) => [step.id, Boolean(step.resolved)])
+      ));
+      await loadHistory();
+    } catch (err) {
+      setError(err.message || "Failed to run analysis.");
+    } finally {
+      setLoading(false);
+    }
+  }, [loadHistory]);
+
+  useEffect(() => {
+    const initialScan = window.setTimeout(analyzeData, 0);
+    return () => window.clearTimeout(initialScan);
+  }, [analyzeData]);
+
+  const handleProtect = async (actionId) => {
+    setResolvingStep(actionId);
+    try {
+      await updateRemediation(actionId, true);
+      setResolvedSteps((previous) => ({ ...previous, [actionId]: true }));
+    } catch (err) {
+      setError(err.message || "Unable to update remediation status.");
+    } finally {
       setResolvingStep(null);
-    }, 1000);
+    }
   };
 
   const handleDownloadReport = () => {
@@ -102,6 +109,16 @@ export default function Dashboard({ onLogout }) {
     const subject = encodeURIComponent(`Data Deletion Request - GDPR/CCPA - ${targetEmail}`);
     const body = encodeURIComponent(`To the Privacy Team at ${domain || 'this organization'},\n\nI am writing to request the immediate deletion of all personal data associated with my email address (${targetEmail}) in accordance with GDPR and CCPA regulations.\n\nPlease confirm when this has been completed.\n\nThank you.`);
     window.open(`mailto:privacy@${domain || 'example.com'}?subject=${subject}&body=${body}`, "_self");
+  };
+
+  const handleJsonExport = () => {
+    const blob = new Blob([JSON.stringify(analysis, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `datafence-scan-${analysis.scan_id}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
   };
   
   const security = analysis?.security || { security_score: 0, risk_level: "UNKNOWN", risk_score: 0 };
@@ -199,6 +216,24 @@ export default function Dashboard({ onLogout }) {
               <RiskCard icon={<Lock size={18} />} title="Blast Radius" value={intelligence.blast_radius.score} subtitle={`${intelligence.blast_radius.connected_services} connected nodes`} />
             </div>
 
+            <div className="osint-card" style={{ marginBottom: "24px" }}>
+              <div className="osint-card-title">
+                <span><Clock3 size={14} style={{ marginRight: "5px" }} /> Scan provenance</span>
+                <span>SCAN #{analysis.scan_id}</span>
+              </div>
+              <div className="terminal-line">
+                <span className="terminal-label">COMPLETED:</span>
+                <span className="terminal-value">{new Date(analysis.scanned_at).toLocaleString()}</span>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "12px" }}>
+                {analysis.sources?.map((source) => (
+                  <span key={source.name} style={{ padding: "5px 9px", border: "1px solid #334155", borderRadius: "4px", color: "#94a3b8", fontSize: "11px" }}>
+                    {source.name}: {source.status}
+                  </span>
+                ))}
+              </div>
+            </div>
+
             <h2 className="hacker-title glitch-text">
               <Activity size={24} /> SECURITY DATA SOURCES
             </h2>
@@ -286,6 +321,10 @@ export default function Dashboard({ onLogout }) {
             </div>
 
             <div style={{ textAlign: "center", margin: "40px 0 20px", display: "flex", justifyContent: "center", gap: "15px", flexWrap: "wrap" }}>
+              <button className="action-button secondary" onClick={analyzeData} disabled={loading}>
+                <RefreshCw size={20} />
+                {loading ? "SCANNING..." : "RUN NEW SCAN"}
+              </button>
               <button 
                 className="action-button primary" 
                 onClick={() => setShowRemediation(true)}
@@ -303,7 +342,29 @@ export default function Dashboard({ onLogout }) {
                 <CheckCircle size={20} />
                 DOWNLOAD REPORT
               </button>
+              <button className="action-button secondary" onClick={handleJsonExport}>
+                <FileJson size={20} />
+                EXPORT JSON
+              </button>
             </div>
+
+            <section className="osint-card" style={{ marginTop: "20px" }}>
+              <div className="osint-card-title">
+                <span><Clock3 size={16} style={{ marginRight: "5px" }} /> SCAN HISTORY</span>
+                <span>{history.length} SAVED</span>
+              </div>
+              <div style={{ display: "grid", gap: "10px", marginTop: "15px" }}>
+                {history.map((scan) => (
+                  <div key={scan.id} className="terminal-line" style={{ gap: "12px", flexWrap: "wrap" }}>
+                    <span className="terminal-label">#{scan.id}</span>
+                    <span className="terminal-value">{new Date(scan.scanned_at).toLocaleString()}</span>
+                    <span>Security {scan.security_score}/100</span>
+                    <span>Risk {scan.risk_level}</span>
+                    <span>{scan.breach_count} breach match(es)</span>
+                  </div>
+                ))}
+              </div>
+            </section>
 
             {showRemediation && (
               <section className="remediation-section osint-card danger" style={{ marginTop: "20px" }}>
@@ -313,8 +374,8 @@ export default function Dashboard({ onLogout }) {
                 </div>
                 
                 <div style={{ display: "flex", flexDirection: "column", gap: "15px", marginTop: "15px" }}>
-                  {remediation_plan.map((step, idx) => (
-                    <div key={idx} style={{ padding: "20px", background: "rgba(15, 23, 42, 0.8)", borderRadius: "6px", borderLeft: `4px solid ${step.critical ? '#ef4444' : '#38bdf8'}` }}>
+                  {remediation_plan.map((step) => (
+                    <div key={step.id} style={{ padding: "20px", background: "rgba(15, 23, 42, 0.8)", borderRadius: "6px", borderLeft: `4px solid ${step.critical ? '#ef4444' : '#38bdf8'}` }}>
                       <h4 style={{ color: step.critical ? "#fca5a5" : "#e0f2fe", marginBottom: "10px", fontSize: "15px", textTransform: "uppercase" }}>
                         {step.title}
                       </h4>
@@ -322,14 +383,14 @@ export default function Dashboard({ onLogout }) {
                       
                       <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "15px" }}>
                         <button 
-                          onClick={() => handleProtect(idx)}
-                          disabled={resolvingStep === idx || resolvedSteps[idx]}
-                          className={`internal-protect-btn ${resolvingStep === idx ? 'resolving' : ''} ${resolvedSteps[idx] ? 'resolved' : ''}`}
+                          onClick={() => handleProtect(step.id)}
+                          disabled={resolvingStep === step.id || resolvedSteps[step.id]}
+                          className={`internal-protect-btn ${resolvingStep === step.id ? 'resolving' : ''} ${resolvedSteps[step.id] ? 'resolved' : ''}`}
                           style={{ flex: 1 }}
                         >
-                          {resolvedSteps[idx] ? (
+                          {resolvedSteps[step.id] ? (
                             <><CheckCircle size={14} /> MARKED AS RESOLVED</>
-                          ) : resolvingStep === idx ? (
+                          ) : resolvingStep === step.id ? (
                             <><Activity size={14} className="glitch-text" /> Verifying...</>
                           ) : (
                             <><Shield size={14} /> Mark as Resolved</>

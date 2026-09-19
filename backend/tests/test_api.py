@@ -59,6 +59,26 @@ def test_scan_is_scoped_to_authenticated_email(monkeypatch):
     result = security.full_analysis(security.SecurityAnalysisRequest(), request, user)
     assert seen["email"] == "scan-owner@example.com"
     assert result["identity"]["email"] == "scan-owner@example.com"
+    assert result["scan_id"] > 0
+    assert result["scanned_at"]
+    assert any(source["name"] == "DATAFENCE risk engine" for source in result["sources"])
+
+    history = security.scan_history(limit=10, current_user=user)
+    assert history["count"] == 1
+    assert history["items"][0]["id"] == result["scan_id"]
+    assert history["items"][0]["breach_status"] == "not_found"
+
+    action_id = result["remediation_plan"][0]["id"]
+    updated = security.update_remediation(
+        action_id, security.RemediationUpdate(resolved=True), user,
+    )
+    assert updated["resolved"] is True
+    with auth.get_db() as db:
+        saved = db.execute(
+            "SELECT resolved FROM remediation_status WHERE user_id = ? AND action_id = ?",
+            (user["id"], action_id),
+        ).fetchone()
+    assert saved["resolved"] == 1
 
     with pytest.raises(ValidationError):
         security.SecurityAnalysisRequest(email="victim@example.com")
@@ -73,3 +93,17 @@ def test_provider_failure_is_not_reported_as_safe(monkeypatch):
     assert result["status"] == "unavailable"
     assert result["verified"] is False
     assert result["risk_level"] == "Unknown"
+
+
+@pytest.mark.parametrize("domain", [
+    "example.com", "accounts.example.co.uk", "sub-domain.example.org",
+])
+def test_safe_domain_accepts_hostnames(domain):
+    assert security.safe_domain(domain) == domain
+
+
+@pytest.mark.parametrize("domain", [
+    "javascript:alert(1)", "example.com/path", "user@example.com", "localhost",
+])
+def test_safe_domain_rejects_unsafe_values(domain):
+    assert security.safe_domain(domain) == ""

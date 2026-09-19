@@ -205,6 +205,34 @@ export async function runFullSecurityAnalysis(phone = "") {
 }
 
 
+export async function getScanHistory(limit = 10) {
+    const token = getToken();
+    if (!token) throw new Error("Please login first.");
+    const response = await fetch(`${API_BASE_URL}/api/security/history?limit=${limit}`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    return parseResponse(response);
+}
+
+
+export async function updateRemediation(actionId, resolved) {
+    const token = getToken();
+    if (!token) throw new Error("Please login first.");
+    const response = await fetch(
+        `${API_BASE_URL}/api/security/remediations/${encodeURIComponent(actionId)}`,
+        {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ resolved }),
+        }
+    );
+    return parseResponse(response);
+}
+
+
 // ============================================================
 // PROTECTION
 // ============================================================
