@@ -1,487 +1,187 @@
+"""Authentication endpoints backed by expiring, hashed opaque sessions."""
+
 import hashlib
+import os
 import secrets
 import sqlite3
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-from datetime import datetime, timezone
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from fastapi import (
-    APIRouter,
-    Depends,
-    Header,
-    HTTPException,
-    status,
-)
+from app.core.rate_limit import RateLimiter
 
-from pydantic import BaseModel, EmailStr
-
-
-router = APIRouter(
-    prefix="/api/auth",
-    tags=["DATAFENCE Authentication"],
-)
+router = APIRouter(prefix="/api/auth", tags=["Authentication"])
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+DB_PATH = Path(os.getenv("DATAFENCE_DB_PATH", str(BACKEND_DIR / "datafence.db")))
+SESSION_HOURS = max(1, int(os.getenv("SESSION_HOURS", "24")))
+auth_limiter = RateLimiter(limit=10, window_seconds=60)
 
 
-DB_PATH = "datafence.db"
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-# ============================================================
-# DATABASE
-# ============================================================
-
-def get_db():
-    connection = sqlite3.connect(DB_PATH)
+def get_db() -> sqlite3.Connection:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(DB_PATH, timeout=10)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
     return connection
 
 
-def init_db():
-
-    db = get_db()
-
-    db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
-
-    db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS sessions (
-            token TEXT PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id)
-        )
-        """
-    )
-
-    db.commit()
-    db.close()
+def init_db() -> None:
+    with get_db() as db:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)").fetchall()}
+        expected = {"id", "token_hash", "user_id", "created_at", "expires_at"}
+        if columns and not expected.issubset(columns):
+            # Invalidate legacy sessions, which stored raw tokens and never expired.
+            db.execute("DROP TABLE sessions")
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_hash TEXT UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        db.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)")
+        db.execute("DELETE FROM sessions WHERE expires_at <= ?", (utc_now().isoformat(),))
 
 
 init_db()
 
 
-# ============================================================
-# PASSWORD SECURITY
-# ============================================================
-
 def hash_password(password: str) -> str:
-
     salt = secrets.token_bytes(16)
-
-    password_hash = hashlib.pbkdf2_hmac(
-        "sha256",
-        password.encode("utf-8"),
-        salt,
-        200_000,
-    )
-
-    return (
-        salt.hex()
-        + ":"
-        + password_hash.hex()
-    )
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 310_000)
+    return f"pbkdf2_sha256$310000${salt.hex()}${digest.hex()}"
 
 
-def verify_password(
-    password: str,
-    stored_hash: str,
-) -> bool:
-
+def verify_password(password: str, encoded: str) -> bool:
     try:
-
-        salt_hex, hash_hex = stored_hash.split(":")
-
-        salt = bytes.fromhex(salt_hex)
-
-        calculated_hash = hashlib.pbkdf2_hmac(
-            "sha256",
-            password.encode("utf-8"),
-            salt,
-            200_000,
+        if "$" in encoded:
+            algorithm, rounds, salt_hex, digest_hex = encoded.split("$")
+            if algorithm != "pbkdf2_sha256":
+                return False
+        else:  # Read the previous format during migration.
+            salt_hex, digest_hex = encoded.split(":")
+            rounds = "200000"
+        actual = hashlib.pbkdf2_hmac(
+            "sha256", password.encode(), bytes.fromhex(salt_hex), int(rounds)
         )
-
-        return secrets.compare_digest(
-            calculated_hash.hex(),
-            hash_hex,
-        )
-
-    except Exception:
-
+        return secrets.compare_digest(actual, bytes.fromhex(digest_hex))
+    except (ValueError, TypeError):
         return False
 
 
-# ============================================================
-# TOKEN
-# ============================================================
+def token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
-def create_session(
-    user_id: int,
-    db,
-):
 
-    token = secrets.token_urlsafe(48)
-
-    created_at = datetime.now(
-        timezone.utc
-    ).isoformat()
-
+def create_session(user_id: int, db: sqlite3.Connection) -> tuple[str, str]:
+    raw_token = secrets.token_urlsafe(48)
+    created_at = utc_now()
+    expires_at = created_at + timedelta(hours=SESSION_HOURS)
     db.execute(
-        """
-        INSERT INTO sessions (
-            token,
-            user_id,
-            created_at
-        )
-        VALUES (?, ?, ?)
-        """,
-        (
-            token,
-            user_id,
-            created_at,
-        ),
+        "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+        (token_hash(raw_token), user_id, created_at.isoformat(), expires_at.isoformat()),
     )
+    return raw_token, expires_at.isoformat()
 
-    return token
-
-
-# ============================================================
-# REQUEST MODELS
-# ============================================================
 
 class SignupRequest(BaseModel):
-
-    name: str
-    email: str
-    password: str
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=2, max_length=100)
+    email: EmailStr
+    password: str = Field(min_length=12, max_length=256)
 
 
 class LoginRequest(BaseModel):
-
-    email: str
-    password: str
-
-
-# ============================================================
-# CURRENT USER
-# ============================================================
-
-def get_current_user(
-    authorization: str | None = Header(
-        default=None
-    ),
-):
-
-    if not authorization:
-
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required",
-        )
-
-    if not authorization.startswith(
-        "Bearer "
-    ):
-
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authorization header",
-        )
-
-    token = authorization[
-        len("Bearer "):
-    ].strip()
-
-    if not token:
-
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token",
-        )
-
-    db = get_db()
-
-    user = db.execute(
-        """
-        SELECT
-            users.id,
-            users.name,
-            users.email,
-            users.created_at
-        FROM sessions
-        JOIN users
-            ON users.id = sessions.user_id
-        WHERE sessions.token = ?
-        """,
-        (token,),
-    ).fetchone()
-
-    db.close()
-
-    if not user:
-
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Session expired or invalid",
-        )
-
-    return dict(user)
+    model_config = ConfigDict(extra="forbid")
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=256)
 
 
-# ============================================================
-# SIGNUP
-# ============================================================
+def bearer_token(authorization: str | None) -> str:
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return token.strip()
 
-@router.post("/signup")
-def signup(
-    request: SignupRequest,
-):
 
-    name = request.name.strip()
-    email = str(request.email).lower().strip()
-    password = request.password
+def get_current_user(authorization: str | None = Header(default=None)) -> dict:
+    token = bearer_token(authorization)
+    now = utc_now().isoformat()
+    with get_db() as db:
+        user = db.execute("""
+            SELECT users.id, users.name, users.email, users.created_at
+            FROM sessions JOIN users ON users.id = sessions.user_id
+            WHERE sessions.token_hash = ? AND sessions.expires_at > ?
+        """, (token_hash(token), now)).fetchone()
+        if not user:
+            db.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash(token),))
+            raise HTTPException(status_code=401, detail="Session expired or invalid")
+        return dict(user)
 
-    # -----------------------------
-    # VALIDATION
-    # -----------------------------
 
+@router.post("/signup", status_code=status.HTTP_201_CREATED)
+def signup(payload: SignupRequest, request: Request):
+    auth_limiter.check(request)
+    name = " ".join(payload.name.split())
+    email = str(payload.email).lower()
     if len(name) < 2:
-
-        raise HTTPException(
-            status_code=400,
-            detail="Name must contain at least 2 characters",
-        )
-
-    if len(password) < 8:
-
-        raise HTTPException(
-            status_code=400,
-            detail="Password must contain at least 8 characters",
-        )
-
-    db = get_db()
-
-    # -----------------------------
-    # CHECK EXISTING USER
-    # -----------------------------
-
-    existing_user = db.execute(
-        """
-        SELECT id
-        FROM users
-        WHERE email = ?
-        """,
-        (email,),
-    ).fetchone()
-
-    if existing_user:
-
-        db.close()
-
-        raise HTTPException(
-            status_code=409,
-            detail="An account with this email already exists",
-        )
-
-    # -----------------------------
-    # CREATE USER
-    # -----------------------------
-
-    password_hash = hash_password(
-        password
-    )
-
-    created_at = datetime.now(
-        timezone.utc
-    ).isoformat()
-
-    cursor = db.execute(
-        """
-        INSERT INTO users (
-            name,
-            email,
-            password_hash,
-            created_at
-        )
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            name,
-            email,
-            password_hash,
-            created_at,
-        ),
-    )
-
-    user_id = cursor.lastrowid
-
-    # -----------------------------
-    # CREATE SESSION
-    # -----------------------------
-
-    token = create_session(
-        user_id,
-        db,
-    )
-
-    db.commit()
-    db.close()
-
-    # -----------------------------
-    # RETURN USER + TOKEN
-    # -----------------------------
-
+        raise HTTPException(status_code=400, detail="Name must contain at least 2 characters")
+    with get_db() as db:
+        try:
+            cursor = db.execute(
+                "INSERT INTO users (name, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
+                (name, email, hash_password(payload.password), utc_now().isoformat()),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=409, detail="An account with this email already exists") from exc
+        user_id = cursor.lastrowid
+        token, expires_at = create_session(user_id, db)
     return {
-        "status": "ACCOUNT_CREATED",
-        "message": "DATAFENCE account created successfully",
-        "token": token,
-        "user": {
-            "id": user_id,
-            "name": name,
-            "email": email,
-        },
+        "status": "ACCOUNT_CREATED", "token": token, "expires_at": expires_at,
+        "user": {"id": user_id, "name": name, "email": email},
     }
 
-
-# ============================================================
-# LOGIN
-# ============================================================
 
 @router.post("/login")
-def login(
-    request: LoginRequest,
-):
+def login(payload: LoginRequest, request: Request):
+    auth_limiter.check(request)
+    email = str(payload.email).lower()
+    with get_db() as db:
+        user = db.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+        if not user or not verify_password(payload.password, user["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        token, expires_at = create_session(user["id"], db)
+        return {
+            "status": "LOGIN_SUCCESS", "token": token, "expires_at": expires_at,
+            "user": {"id": user["id"], "name": user["name"], "email": user["email"]},
+        }
 
-    email = str(
-        request.email
-    ).lower().strip()
-
-    db = get_db()
-
-    user = db.execute(
-        """
-        SELECT *
-        FROM users
-        WHERE email = ?
-        """,
-        (email,),
-    ).fetchone()
-
-    if not user:
-        # Auto-register if user doesn't exist
-        password_hash = hash_password(request.password)
-        created_at = datetime.now(timezone.utc).isoformat()
-        
-        # We don't have a name, so use part of email
-        name = email.split('@')[0]
-        
-        cursor = db.execute(
-            """
-            INSERT INTO users (
-                name,
-                email,
-                password_hash,
-                created_at
-            )
-            VALUES (?, ?, ?, ?)
-            """,
-            (name, email, password_hash, created_at),
-        )
-        user_id = cursor.lastrowid
-        user_name = name
-    else:
-        if not verify_password(
-            request.password,
-            user["password_hash"],
-        ):
-            db.close()
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid email or password",
-            )
-        user_id = user["id"]
-        user_name = user["name"]
-
-    # -----------------------------
-    # CREATE SESSION
-    # -----------------------------
-
-    token = create_session(
-        user_id,
-        db,
-    )
-
-    db.commit()
-    db.close()
-
-    return {
-        "status": "LOGIN_SUCCESS",
-        "token": token,
-        "user": {
-            "id": user_id,
-            "name": user_name,
-            "email": email,
-        },
-    }
-
-
-# ============================================================
-# CURRENT USER
-# ============================================================
 
 @router.get("/me")
-def me(
-    current_user=Depends(
-        get_current_user
-    ),
-):
-
-    return {
-        "status": "AUTHENTICATED",
-        "user": current_user,
-    }
+def me(current_user=Depends(get_current_user)):
+    return {"status": "AUTHENTICATED", "user": current_user}
 
 
-# ============================================================
-# LOGOUT
-# ============================================================
-
-@router.post("/logout")
-def logout(
-    authorization: str | None = Header(
-        default=None
-    ),
-):
-
-    if (
-        authorization
-        and authorization.startswith("Bearer ")
-    ):
-
-        token = authorization[
-            len("Bearer "):
-        ].strip()
-
-        db = get_db()
-
-        db.execute(
-            """
-            DELETE FROM sessions
-            WHERE token = ?
-            """,
-            (token,),
-        )
-
-        db.commit()
-        db.close()
-
-    return {
-        "status": "LOGOUT_SUCCESS"
-    }
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(authorization: str | None = Header(default=None)):
+    token = bearer_token(authorization)
+    with get_db() as db:
+        db.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash(token),))

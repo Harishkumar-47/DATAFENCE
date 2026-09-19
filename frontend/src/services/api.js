@@ -168,43 +168,10 @@ export async function logout() {
 
 
 // ============================================================
-// BASIC ANALYSIS
-// ============================================================
-
-export async function runAnalysis() {
-
-    const token = getToken();
-
-    if (!token) {
-
-        throw new Error(
-            "Please login before running analysis."
-        );
-    }
-
-    const response = await fetch(
-        `${API_BASE_URL}/api/analysis/run`,
-        {
-            method: "POST",
-
-            headers: {
-                Authorization:
-                    `Bearer ${token}`,
-            },
-        }
-    );
-
-    return parseResponse(
-        response
-    );
-}
-
-
-// ============================================================
 // FULL SECURITY ANALYSIS
 // ============================================================
 
-export async function runFullSecurityAnalysis(email, phone) {
+export async function runFullSecurityAnalysis(phone = "") {
 
     const token = getToken();
 
@@ -227,7 +194,6 @@ export async function runFullSecurityAnalysis(email, phone) {
             },
             
             body: JSON.stringify({
-                email: email,
                 phone: phone
             }),
         }

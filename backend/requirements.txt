@@ -1,9 +1,7 @@
-fastapi
-uvicorn
-pydantic
-email-validator
-python-dotenv
-networkx
-requests
-phonenumbers
-holehe
+fastapi>=0.116,<1
+uvicorn[standard]>=0.35,<1
+pydantic>=2.11,<3
+email-validator>=2.2,<3
+requests>=2.32,<3
+phonenumbers>=9.0,<10
+holehe>=1.61,<2

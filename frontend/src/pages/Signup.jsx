@@ -17,6 +17,7 @@ import {
 
 function Signup({
     onLogin,
+    onBackToLogin,
 }) {
 
     const [name, setName] =
@@ -70,10 +71,10 @@ function Signup({
             }
 
 
-            if (password.length < 8) {
+            if (password.length < 12) {
 
                 setError(
-                    "Password must contain at least 8 characters."
+                    "Password must contain at least 12 characters."
                 );
 
                 return;
@@ -103,16 +104,11 @@ function Signup({
                     );
 
 
-                setSuccess(
-                    result.message ||
-                    "Account created successfully."
-                );
-
-
-                setName("");
-                setEmail("");
-                setPassword("");
-                setConfirmPassword("");
+                if (!result.token || !result.user) {
+                    throw new Error("Account created without a valid session.");
+                }
+                setSuccess("Account created successfully.");
+                onLogin(result.token, result.user);
 
 
             } catch (err) {
@@ -284,7 +280,7 @@ function Signup({
 
                         <input
                             type="password"
-                            placeholder="Minimum 8 characters"
+                            placeholder="Minimum 12 characters"
                             value={password}
                             onChange={
                                 (event) =>
@@ -351,7 +347,7 @@ function Signup({
 
                     <button
                         type="button"
-                        onClick={onLogin}
+                        onClick={onBackToLogin}
                     >
                         Sign in
                     </button>
