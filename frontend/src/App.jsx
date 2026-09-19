@@ -4,6 +4,7 @@ import {
 } from "react";
 
 import Login from "./pages/Login";
+import Signup from "./pages/Signup";
 
 import Dashboard from "./pages/Dashboard";
 
@@ -25,6 +26,8 @@ function App() {
         checkingAuth,
         setCheckingAuth,
     ] = useState(true);
+
+    const [authView, setAuthView] = useState("login");
 
 
     // ========================================================
@@ -207,10 +210,20 @@ function App() {
 
     if (!authenticated) {
 
+        if (authView === "signup") {
+            return (
+                <Signup
+                    onLogin={handleLogin}
+                    onBackToLogin={() => setAuthView("login")}
+                />
+            );
+        }
+
         return (
 
             <Login
                 onLogin={handleLogin}
+                onSignup={() => setAuthView("signup")}
             />
 
         );

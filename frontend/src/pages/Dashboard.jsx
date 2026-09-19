@@ -4,11 +4,8 @@ import {
   LogOut,
   AlertTriangle,
   CheckCircle,
-  XCircle,
   Activity,
   Globe,
-  Database,
-  Search,
   Brain,
   Lock,
   UserCircle,
@@ -48,15 +45,15 @@ export default function Dashboard({ onLogout }) {
   const [analysis, setAnalysis] = useState(null);
 
   const user = JSON.parse(localStorage.getItem("datafence_user") || '{"name": "User", "email": ""}');
-  const targetEmail = localStorage.getItem("datafence_target_email") || "";
-  const targetPhone = localStorage.getItem("datafence_target_phone") || "";
+  const targetEmail = user.email;
+  const targetPhone = "Not collected";
 
   useEffect(() => {
     let mounted = true;
 
     const analyzeData = async () => {
       try {
-        const data = await runFullSecurityAnalysis(targetEmail, targetPhone);
+        const data = await runFullSecurityAnalysis();
         if (mounted) setAnalysis(data);
       } catch (err) {
         if (mounted) setError(err.message || "Failed to run analysis.");
@@ -70,16 +67,23 @@ export default function Dashboard({ onLogout }) {
     return () => {
       mounted = false;
     };
-  }, [targetEmail, targetPhone]);
+  }, []);
 
   const [showRemediation, setShowRemediation] = useState(false);
   const [resolvingStep, setResolvingStep] = useState(null);
-  const [resolvedSteps, setResolvedSteps] = useState({});
+  const [resolvedSteps, setResolvedSteps] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("datafence_resolved_steps") || "{}"); }
+    catch { return {}; }
+  });
 
   const handleProtect = (stepIndex) => {
     setResolvingStep(stepIndex);
     setTimeout(() => {
-      setResolvedSteps(prev => ({ ...prev, [stepIndex]: true }));
+      setResolvedSteps(prev => {
+        const updated = { ...prev, [stepIndex]: true };
+        localStorage.setItem("datafence_resolved_steps", JSON.stringify(updated));
+        return updated;
+      });
       setResolvingStep(null);
     }, 1000);
   };
@@ -97,7 +101,7 @@ export default function Dashboard({ onLogout }) {
   const handleGenerateEmail = (domain) => {
     const subject = encodeURIComponent(`Data Deletion Request - GDPR/CCPA - ${targetEmail}`);
     const body = encodeURIComponent(`To the Privacy Team at ${domain || 'this organization'},\n\nI am writing to request the immediate deletion of all personal data associated with my email address (${targetEmail}) in accordance with GDPR and CCPA regulations.\n\nPlease confirm when this has been completed.\n\nThank you.`);
-    window.location.href = `mailto:privacy@${domain || 'example.com'}?subject=${subject}&body=${body}`;
+    window.open(`mailto:privacy@${domain || 'example.com'}?subject=${subject}&body=${body}`, "_self");
   };
   
   const security = analysis?.security || { security_score: 0, risk_level: "UNKNOWN", risk_score: 0 };
@@ -155,24 +159,19 @@ export default function Dashboard({ onLogout }) {
             </p>
 
             <div className="identity-badge">
-              <div className="identity-avatar">{targetEmail ? targetEmail.charAt(0).toUpperCase() : (targetPhone ? targetPhone.charAt(0) : 'U')}</div>
+              <div className="identity-avatar">{targetEmail ? targetEmail.charAt(0).toUpperCase() : 'U'}</div>
               <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                <span style={{ fontSize: "10px", color: "var(--color-primary)", letterSpacing: "1px", fontWeight: "600" }}>TARGET ACQUIRED</span>
-                <strong style={{ color: "#fff", fontSize: "15px" }}>{targetEmail || targetPhone}</strong>
-                {targetEmail && targetPhone && <span style={{ color: "var(--color-muted)", fontSize: "12px" }}>{targetPhone}</span>}
+                <span style={{ fontSize: "10px", color: "var(--color-primary)", letterSpacing: "1px", fontWeight: "600" }}>ACCOUNT ANALYSIS</span>
+                <strong style={{ color: "#fff", fontSize: "15px" }}>{targetEmail}</strong>
               </div>
             </div>
             
             <button 
               className="action-button secondary" 
-              onClick={() => {
-                localStorage.removeItem("datafence_target_email");
-                localStorage.removeItem("datafence_target_phone");
-                onLogout();
-              }}
+              onClick={onLogout}
               style={{ marginTop: "20px" }}
             >
-              Analyze Another Target
+              Sign Out
             </button>
           </div>
         </section>
@@ -201,7 +200,7 @@ export default function Dashboard({ onLogout }) {
             </div>
 
             <h2 className="hacker-title glitch-text">
-              <Activity size={24} /> REAL-TIME OSINT TRACE
+              <Activity size={24} /> SECURITY DATA SOURCES
             </h2>
 
             <div className="osint-grid">
@@ -235,7 +234,7 @@ export default function Dashboard({ onLogout }) {
                         )) || <div style={{ color: '#888' }}>No detailed data available</div>}
                       </div>
                     </div>
-                  ) : (
+                  ) : analysis?.breach_analysis?.status === "not_found" ? (
                     <div>
                       <div className="terminal-line">
                         <span className="terminal-label">TARGET:</span>
@@ -243,9 +242,14 @@ export default function Dashboard({ onLogout }) {
                       </div>
                       <div className="terminal-line">
                         <span className="terminal-label">STATUS:</span>
-                        <span className="terminal-value">SECURE</span>
+                        <span className="terminal-value">NO MATCH REPORTED</span>
                       </div>
-                      <p style={{ color: '#888', marginTop: '15px', fontSize: '12px' }}>No active breaches detected in public datasets.</p>
+                      <p style={{ color: '#888', marginTop: '15px', fontSize: '12px' }}>The provider reported no match. This is not a guarantee that the account has never been exposed.</p>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="terminal-line"><span className="terminal-label">STATUS:</span><span className="terminal-value">UNAVAILABLE</span></div>
+                      <p style={{ color: '#f39c12', marginTop: '15px', fontSize: '12px' }}>{analysis?.breach_analysis?.message}</p>
                     </div>
                   )}
                 </div>
@@ -262,8 +266,10 @@ export default function Dashboard({ onLogout }) {
                     <span className="terminal-label">TARGET:</span>
                     <span className="terminal-value" style={{ color: "#ff003c" }}>{targetEmail}</span>
                   </div>
-                  <span className="terminal-label" style={{ display: 'block', marginBottom: '10px' }}>REAL-TIME ACTIVE REGISTRATIONS:</span>
-                  {analysis.active_registered_sites.length > 0 ? (
+                  <span className="terminal-label" style={{ display: 'block', marginBottom: '10px' }}>ACCOUNT DISCOVERY:</span>
+                  {analysis.account_discovery?.status !== "complete" ? (
+                    <p style={{ color: '#888', fontSize: '12px' }}>{analysis.account_discovery?.message || "Account discovery is unavailable."}</p>
+                  ) : analysis.active_registered_sites.length > 0 ? (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
                       {analysis.active_registered_sites.map((site, idx) => (
                         <span key={idx} style={{ background: 'rgba(255, 0, 60, 0.1)', border: '1px solid #ff003c', color: '#ff003c', padding: '5px 10px', borderRadius: '4px', fontSize: '12px' }}>
@@ -272,53 +278,11 @@ export default function Dashboard({ onLogout }) {
                       ))}
                     </div>
                   ) : (
-                    <p style={{ color: '#888', fontSize: '12px' }}>No active accounts detected on scanned platforms.</p>
+                    <p style={{ color: '#888', fontSize: '12px' }}>The configured services reported no registrations.</p>
                   )}
                 </div>
               )}
 
-              {/* PHONE NUMBER TRACE */}
-              {targetPhone && (
-                <div className={`osint-card ${intelligence.inference.findings.length > 0 ? 'danger' : ''}`}>
-                  <div className="osint-card-title">
-                    <span><Database size={14} style={{ marginRight: '5px' }} /> Telecom Intelligence (Sanchar Saathi Trace)</span>
-                    <span>ACTIVE</span>
-                  </div>
-                  
-                  <div className="terminal-line">
-                    <span className="terminal-label">TARGET:</span>
-                    <span className="terminal-value">{targetPhone}</span>
-                  </div>
-
-                  {intelligence.inference.findings.map((finding, idx) => {
-                    if (finding.source_categories.includes("Phone Number")) {
-                      return (
-                        <div key={idx} style={{ marginTop: "15px", borderTop: "1px dashed #00ff00", paddingTop: "15px" }}>
-                          <span className="terminal-label" style={{ display: 'block', marginBottom: '10px' }}>NETWORK TRACE FOUND:</span>
-                          <p style={{ color: "#ff003c", fontSize: "14px", lineHeight: "1.5" }}>{finding.inference}</p>
-                          <div className="terminal-line" style={{ marginTop: "10px" }}>
-                            <span className="terminal-label">LINKED SIM CARDS:</span>
-                            <span className="terminal-value">{finding.linked_sims || 1} (Simulated Sanchar Saathi)</span>
-                          </div>
-                          {finding.linked_apps && finding.linked_apps.length > 0 && (
-                            <div className="terminal-line" style={{ marginTop: "10px" }}>
-                              <span className="terminal-label">LINKED ACCOUNTS & APPS:</span>
-                              <span className="terminal-value" style={{ color: "#ff003c" }}>{finding.linked_apps.join(", ")}</span>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    }
-                    return null;
-                  })}
-                  
-                  {!intelligence.inference.findings.some(f => f.source_categories.includes("Phone Number")) && (
-                    <div style={{ marginTop: "15px" }}>
-                      <p style={{ color: '#888', fontSize: '12px' }}>Trace active. Awaiting carrier ping.</p>
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
 
             <div style={{ textAlign: "center", margin: "40px 0 20px", display: "flex", justifyContent: "center", gap: "15px", flexWrap: "wrap" }}>

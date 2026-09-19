@@ -1,88 +1,81 @@
 # DATAFENCE
 
-## What is DATAFENCE?
-**DATAFENCE** is an advanced Personal Data Exposure, Intelligence, and Adaptive Security Platform. It acts as a centralized intelligence engine that aggressively maps a user's digital footprint across the web. By analyzing historical breach data and predicting active account footprints, it empowers individuals to understand exactly where their personal data resides and provides automated, actionable steps to reclaim their digital privacy.
+DATAFENCE is a personal security dashboard that checks the authenticated account email against a breach-data provider, calculates explainable risk indicators, and produces practical remediation guidance.
 
-## Features
-- **Real-Time Active OSINT Footprinting**: Actively checks password-recovery endpoints of 50+ popular services (Twitter, Spotify, Instagram, etc.) to discover live, active accounts linked to an email.
-- **Historical Breach Analytics**: Integrates with security APIs to fetch specific breached organizations, exposed domains, and exact counts of compromised accounts.
-- **Telecom Trace (Sanchar Saathi style)**: Analyzes phone numbers to determine regional data, carrier information, and maps connected digital apps.
-- **Threat & Blast Radius Scoring**: An intelligent risk engine that correlates exposed data to determine potential identity inferences and the "blast radius" of compromised data.
-- **Interactive Remediation Suite**: 
-  - Dynamic step-by-step security checklist.
-  - One-click **GDPR/CCPA Deletion Email** generator.
-  - Direct secure links to vulnerable platforms.
-  - Exportable PDF/Text Security Audit Reports.
-- **Secure Authentication**: Fully secure JWT-based session management using SQLite and PBKDF2 hashing.
+It distinguishes verified provider results from unavailable services. Phone lookup is limited to public numbering-plan metadata; it does not claim to trace a device, enumerate SIM cards, or discover linked applications.
 
-## Uses & Applications
-- **Personal Privacy Audits**: Individuals can discover hidden digital footprints and clean up unused or vulnerable online accounts.
-- **Breach Response & Recovery**: Instantly know if an email or phone number was caught in a recent data leak and take immediate action.
-- **GDPR Enforcement**: Easily exercise the "Right to be Forgotten" by auto-generating legal deletion requests for compromised organizations.
-- **Cybersecurity Awareness**: Educate users on their "Blast Radius" by showing how one leaked credential affects their entire digital identity.
+## Security model
 
-## Tech Stack & Tools
-- **Frontend**: React, Vite, Lucide-React (Icons), Vanilla CSS (Custom Hacker UI).
-- **Backend**: Python, FastAPI, Uvicorn, Pydantic.
-- **Database**: SQLite (Authentication & Sessions).
-- **OSINT & Intelligence Tools**: 
-  - `holehe` (Email OSINT module)
-  - `phonenumbers` (Telecom module)
-  - `XposedOrNot API` (Breach Analytics)
-- **Containerization**: Docker & Docker Compose.
+- Signup and login are separate; login never creates an account.
+- Analysis is scoped to the signed-in account email. Arbitrary email targets are rejected.
+- Passwords use salted PBKDF2-SHA256 with 310,000 iterations.
+- Opaque sessions expire and only SHA-256 token hashes are stored server-side.
+- Authentication and analysis endpoints have in-process rate limits.
+- CORS is restricted through `CORS_ORIGINS`.
+- Account discovery is disabled by default and must be explicitly enabled.
 
-## System Model & Flow Chart
-The platform operates using a multi-stage **Intelligence Pipeline Model** that correlates raw user inputs into structured security assessments.
+For an internet-facing deployment, add email ownership verification, TLS at the edge, a shared Redis-backed rate limiter, managed backups, and privacy/legal review before enabling account discovery.
 
-```mermaid
-graph TD
-    A[User Inputs Email/Phone] --> B[FastAPI Backend]
-    B --> C{Security Assessment Engine}
-    
-    C -->|Historical Breaches| D[XposedOrNot API]
-    D --> E[Detailed Org Breach Stats]
-    
-    C -->|Active Footprint| F[Holehe OSINT]
-    F --> G[Real-Time Registered Sites]
-    
-    C -->|Telecom Trace| H[Phonenumbers Lib]
-    H --> I[Carrier & Network Insights]
-    
-    E & G & I --> J[Intelligence Pipeline]
-    J --> K[Risk Scoring & Threat Modeling]
-    
-    K --> L[React/Vite Dashboard]
-    L --> M[Interactive Remediation Plan]
-    M --> N[GDPR Deletion Emails]
-    M --> O[Downloadable Security Reports]
+## Stack
+
+- React 19 and Vite
+- FastAPI and Pydantic
+- SQLite for users and sessions
+- XposedOrNot for breach lookup
+- `phonenumbers` for optional offline numbering metadata
+- Docker Compose for local development
+
+## Run with Docker
+
+```bash
+docker compose up --build
 ```
 
-## How to Deploy
-This project is fully containerized with Docker. Hot-reloading is configured by default for both the frontend and backend to ensure a smooth development experience.
+Open <http://localhost:5173>. API documentation is at <http://localhost:8000/docs> and health status at <http://localhost:8000/health>.
 
-### Prerequisites
-- Install [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/).
+The default Compose configuration stores the database under `backend/data/`, restricts browser access to `http://localhost:5173`, and leaves account discovery disabled.
 
-### Step-by-Step Deployment
+## Run locally
 
-1. **Clone the Repository**
-   ```bash
-   git clone https://github.com/Krish-cys/DATAFENCE-git.git
-   cd DATAFENCE-git
-   ```
+Backend:
 
-2. **Run with Docker Compose**
-   Build and start the application in detached mode:
-   ```bash
-   sudo docker compose up --build -d
-   ```
+```bash
+python -m venv .venv
+.venv/bin/pip install -r backend/requirements-dev.txt
+DATAFENCE_DB_PATH=/tmp/datafence-dev.db .venv/bin/uvicorn app.main:app --app-dir backend --reload
+```
 
-3. **Access the Application**
-   - **Frontend UI**: Open your browser and navigate to `http://localhost:5173`
-   - **Backend API**: Running at `http://localhost:8000`
-   - **API Documentation**: Interactive Swagger docs available at `http://localhost:8000/docs`
+Frontend:
 
-4. **Stopping the Application**
-   ```bash
-   sudo docker compose down
-   ```
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+## Verification
+
+```bash
+.venv/bin/pytest -q backend/tests
+cd frontend && npm run lint && npm run build
+```
+
+Tests cover session hashing and revocation, rejection of unknown logins, scan ownership boundaries, and external-provider failure handling.
+
+## Configuration
+
+See [.env.example](.env.example).
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DATAFENCE_DB_PATH` | `backend/datafence.db` | SQLite database path |
+| `SESSION_HOURS` | `24` | Session lifetime |
+| `CORS_ORIGINS` | `http://localhost:5173` | Allowed browser origins |
+| `ENABLE_ACCOUNT_DISCOVERY` | `false` | Enables Holehe for the signed-in email |
+
+## Limitations
+
+- “No breach reported” is not proof that an account has never been compromised.
+- External data services have their own availability and privacy terms.
+- Risk scores are heuristic prioritization aids, not guarantees or professional security advice.
+- Rate limiting is process-local and should be replaced for multi-worker deployments.
