@@ -2,6 +2,8 @@
 
 DATAFENCE is a personal security dashboard that checks the authenticated account email against a breach-data provider, calculates explainable risk indicators, and produces practical remediation guidance.
 
+Scan summaries and remediation progress are saved per account, enabling users to track security posture over time. Results can be exported as a readable text report or structured JSON.
+
 It distinguishes verified provider results from unavailable services. Phone lookup is limited to public numbering-plan metadata; it does not claim to trace a device, enumerate SIM cards, or discover linked applications.
 
 ## Security model
@@ -13,6 +15,7 @@ It distinguishes verified provider results from unavailable services. Phone look
 - Authentication and analysis endpoints have in-process rate limits.
 - CORS is restricted through `CORS_ORIGINS`.
 - Account discovery is disabled by default and must be explicitly enabled.
+- Scan history stores scores and provider statuses, not raw third-party response bodies.
 
 For an internet-facing deployment, add email ownership verification, TLS at the edge, a shared Redis-backed rate limiter, managed backups, and privacy/legal review before enabling account discovery.
 
@@ -60,7 +63,7 @@ npm run dev
 cd frontend && npm run lint && npm run build
 ```
 
-Tests cover session hashing and revocation, rejection of unknown logins, scan ownership boundaries, and external-provider failure handling.
+Tests cover session hashing and revocation, rejection of unknown logins, scan ownership boundaries, history and remediation persistence, domain sanitization, and external-provider failure handling.
 
 ## Configuration
 

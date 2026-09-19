@@ -59,6 +59,31 @@ def init_db() -> None:
         """)
         db.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)")
         db.execute("DELETE FROM sessions WHERE expires_at <= ?", (utc_now().isoformat(),))
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS scan_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                scanned_at TEXT NOT NULL,
+                security_score INTEGER NOT NULL,
+                risk_score INTEGER NOT NULL,
+                risk_level TEXT NOT NULL,
+                breach_status TEXT NOT NULL,
+                breach_count INTEGER NOT NULL,
+                discovery_status TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        db.execute("CREATE INDEX IF NOT EXISTS idx_scan_history_user ON scan_history(user_id, scanned_at DESC)")
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS remediation_status (
+                user_id INTEGER NOT NULL,
+                action_id TEXT NOT NULL,
+                resolved INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(user_id, action_id),
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
 
 
 init_db()
